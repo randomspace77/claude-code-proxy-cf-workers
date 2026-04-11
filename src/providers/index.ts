@@ -26,6 +26,14 @@ export async function dispatchToProvider(
     );
   }
 
+  if (!provider.apiKey) {
+    console.warn({
+      _tag: "provider-key-missing",
+      provider: provider.name,
+      message: `No dedicated API key found. Expected secret: PROVIDER_${provider.name.toUpperCase().replace(/-/g, "_")}_API_KEY. Falling back to client key.`,
+    });
+  }
+
   if (provider.protocol === "anthropic") {
     return sendAnthropicRequest(provider, body, effectiveApiKey, config);
   }
