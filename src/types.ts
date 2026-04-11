@@ -17,6 +17,8 @@ export interface Env {
   CUSTOM_HEADERS?: string; // JSON string of custom headers
   PASSTHROUGH_MODELS?: string; // Comma-separated model prefixes for Anthropic passthrough
   ENABLE_MODEL_MAPPING?: string; // "true" to enable Claude→provider model mapping
+  PROVIDERS?: string; // JSON string of multi-provider config
+  [key: string]: string | undefined; // Allow dynamic PROVIDER_<NAME>_API_KEY access
 }
 
 // ---- Claude API types ----
@@ -206,18 +208,67 @@ export interface OpenAIStreamChunk {
 // ---- Config types ----
 
 export interface AppConfig {
+  // Global settings
+  anthropicApiKey?: string;
+  logLevel: string;
+  requestTimeout: number;
+  maxTokensLimit: number;
+  minTokensLimit: number;
+
+  // Multi-provider
+  defaultProvider: string;
+  routing: Record<string, string>;       // model pattern → provider name
+  providers: Record<string, ResolvedProvider>;
+
+  // Legacy (single-provider compat, used when PROVIDERS is not set)
   openaiApiKey: string;
   openaiBaseUrl: string;
-  anthropicApiKey?: string;
   azureApiVersion?: string;
   bigModel: string;
   middleModel: string;
   smallModel: string;
-  maxTokensLimit: number;
-  minTokensLimit: number;
-  requestTimeout: number;
-  logLevel: string;
   customHeaders: Record<string, string>;
   passthroughModels: string[];
   enableModelMapping: boolean;
+}
+
+// ---- Provider types ----
+
+/** Protocol a provider speaks */
+export type ProviderProtocol = "openai" | "anthropic";
+
+/** Built-in known provider definition */
+export interface KnownProvider {
+  baseUrl: string;
+  protocol: ProviderProtocol;
+  defaultHeaders?: Record<string, string>;
+}
+
+/** User-supplied per-provider config (from PROVIDERS JSON) */
+export interface ProviderUserConfig {
+  baseUrl?: string;                     // override known provider URL
+  protocol?: ProviderProtocol;          // required for custom providers
+  timeout?: number;                     // per-provider timeout override
+  headers?: Record<string, string>;     // extra headers
+  azureApiVersion?: string;             // Azure-specific
+  modelMapping?: Record<string, string>; // Claude name → actual model
+}
+
+/** Fully resolved provider config at runtime */
+export interface ResolvedProvider {
+  name: string;
+  baseUrl: string;
+  protocol: ProviderProtocol;
+  apiKey: string;                       // resolved key (server or empty for passthrough)
+  timeout: number;
+  headers: Record<string, string>;
+  azureApiVersion?: string;
+  modelMapping?: Record<string, string>;
+}
+
+/** Top-level shape of the PROVIDERS JSON env var */
+export interface ProvidersJsonConfig {
+  default: string;
+  routing?: Record<string, string>;
+  providers?: Record<string, ProviderUserConfig>;
 }

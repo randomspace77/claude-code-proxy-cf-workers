@@ -15,6 +15,18 @@ const defaultConfig: AppConfig = {
   customHeaders: {},
   passthroughModels: [],
   enableModelMapping: false,
+  defaultProvider: "default",
+  routing: {},
+  providers: {
+    default: {
+      name: "default",
+      baseUrl: "https://api.openai.com/v1",
+      protocol: "openai",
+      apiKey: "test-key",
+      timeout: 90,
+      headers: {},
+    },
+  },
 };
 
 describe("Request Conversion", () => {
@@ -33,7 +45,7 @@ describe("Request Conversion", () => {
     expect(result.messages[0].content).toBe("Hello");
   });
 
-  it("maps haiku to small model when model mapping enabled", () => {
+  it("passes haiku model unchanged (mapping now in provider layer)", () => {
     const mappingConfig: AppConfig = { ...defaultConfig, enableModelMapping: true };
     const claudeReq: ClaudeMessagesRequest = {
       model: "claude-3-5-haiku-20241022",
@@ -42,10 +54,10 @@ describe("Request Conversion", () => {
     };
 
     const result = convertClaudeToOpenAI(claudeReq, mappingConfig);
-    expect(result.model).toBe("gpt-4o-mini");
+    expect(result.model).toBe("claude-3-5-haiku-20241022");
   });
 
-  it("maps opus to big model when model mapping enabled", () => {
+  it("passes opus model unchanged (mapping now in provider layer)", () => {
     const mappingConfig: AppConfig = { ...defaultConfig, enableModelMapping: true };
     const claudeReq: ClaudeMessagesRequest = {
       model: "claude-3-opus-20240229",
@@ -54,7 +66,7 @@ describe("Request Conversion", () => {
     };
 
     const result = convertClaudeToOpenAI(claudeReq, mappingConfig);
-    expect(result.model).toBe("gpt-4o");
+    expect(result.model).toBe("claude-3-opus-20240229");
   });
 
   it("includes system message", () => {

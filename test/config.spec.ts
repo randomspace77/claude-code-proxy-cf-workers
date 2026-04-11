@@ -1,16 +1,44 @@
 import { describe, it, expect } from "vitest";
-import {
-  loadConfig,
-  mapModel,
-  isPassthroughModel,
-  validateClientApiKey,
-  extractApiKey,
-} from "../src/config";
-import type { Env, AppConfig } from "../src/types";
+import { loadConfig } from "../src/config";
+import { extractApiKey, validateClientApiKey } from "../src/auth";
+import { resolveProvider, globMatch, mapModelForProvider } from "../src/router";
+import type { Env, AppConfig, ResolvedProvider } from "../src/types";
 
-// ---- loadConfig ----
+// Helper: build a minimal AppConfig for tests
+function makeConfig(overrides?: Partial<AppConfig>): AppConfig {
+  return {
+    anthropicApiKey: undefined,
+    logLevel: "WARNING",
+    requestTimeout: 90,
+    maxTokensLimit: 16384,
+    minTokensLimit: 4096,
+    defaultProvider: "default",
+    routing: {},
+    providers: {
+      default: {
+        name: "default",
+        baseUrl: "https://api.openai.com/v1",
+        protocol: "openai",
+        apiKey: "test",
+        timeout: 90,
+        headers: {},
+      },
+    },
+    openaiApiKey: "test",
+    openaiBaseUrl: "https://api.openai.com/v1",
+    bigModel: "gpt-4o",
+    middleModel: "gpt-4o",
+    smallModel: "gpt-4o-mini",
+    customHeaders: {},
+    passthroughModels: [],
+    enableModelMapping: false,
+    ...overrides,
+  };
+}
 
-describe("loadConfig", () => {
+// ---- loadConfig (legacy mode) ----
+
+describe("loadConfig (legacy mode)", () => {
   const minimalEnv: Env = {
     OPENAI_API_KEY: "sk-test-key",
     OPENAI_BASE_URL: "https://api.openai.com/v1",
@@ -36,7 +64,6 @@ describe("loadConfig", () => {
     expect(config.logLevel).toBe("WARNING");
     expect(config.customHeaders).toEqual({});
     expect(config.anthropicApiKey).toBeUndefined();
-    expect(config.azureApiVersion).toBeUndefined();
     expect(config.passthroughModels).toEqual([]);
     expect(config.enableModelMapping).toBe(false);
   });
@@ -47,7 +74,7 @@ describe("loadConfig", () => {
     expect(config.openaiApiKey).toBe("");
     expect(config.openaiBaseUrl).toBe("https://api.openai.com/v1");
     expect(config.bigModel).toBe("gpt-4o");
-    expect(config.middleModel).toBe("gpt-4o"); // defaults to bigModel
+    expect(config.middleModel).toBe("gpt-4o");
     expect(config.smallModel).toBe("gpt-4o-mini");
     expect(config.maxTokensLimit).toBe(16384);
     expect(config.minTokensLimit).toBe(4096);
@@ -68,10 +95,7 @@ describe("loadConfig", () => {
   });
 
   it("ignores invalid CUSTOM_HEADERS JSON", () => {
-    const env: Env = {
-      ...minimalEnv,
-      CUSTOM_HEADERS: "not valid json",
-    };
+    const env: Env = { ...minimalEnv, CUSTOM_HEADERS: "not valid json" };
     const config = loadConfig(env);
     expect(config.customHeaders).toEqual({});
   });
@@ -86,10 +110,7 @@ describe("loadConfig", () => {
   });
 
   it("ignores array CUSTOM_HEADERS", () => {
-    const env: Env = {
-      ...minimalEnv,
-      CUSTOM_HEADERS: '["not", "an", "object"]',
-    };
+    const env: Env = { ...minimalEnv, CUSTOM_HEADERS: '["not", "an", "object"]' };
     const config = loadConfig(env);
     expect(config.customHeaders).toEqual({});
   });
@@ -98,17 +119,14 @@ describe("loadConfig", () => {
     const env: Env = {
       ...minimalEnv,
       CUSTOM_HEADERS: JSON.stringify({
-        "Authorization": "Bearer evil",
+        Authorization: "Bearer evil",
         "api-key": "stolen",
-        "Host": "evil.com",
+        Host: "evil.com",
         "X-Safe-Header": "allowed",
       }),
     };
     const config = loadConfig(env);
     expect(config.customHeaders).toEqual({ "X-Safe-Header": "allowed" });
-    expect(config.customHeaders).not.toHaveProperty("Authorization");
-    expect(config.customHeaders).not.toHaveProperty("api-key");
-    expect(config.customHeaders).not.toHaveProperty("Host");
   });
 
   it("sets optional secrets when provided", () => {
@@ -141,184 +159,266 @@ describe("loadConfig", () => {
     expect(config.passthroughModels).toEqual(["minimax", "some-model", "another"]);
   });
 
-  it("defaults to empty passthrough models", () => {
+  it("creates default provider from legacy env vars", () => {
     const config = loadConfig(minimalEnv);
-    expect(config.passthroughModels).toEqual([]);
+    expect(config.defaultProvider).toBe("default");
+    expect(config.providers.default).toBeDefined();
+    expect(config.providers.default.baseUrl).toBe("https://api.openai.com/v1");
+    expect(config.providers.default.protocol).toBe("openai");
+    expect(config.providers.default.apiKey).toBe("sk-test-key");
+  });
+
+  it("creates passthrough provider from PASSTHROUGH_MODELS", () => {
+    const env: Env = { ...minimalEnv, PASSTHROUGH_MODELS: "minimax" };
+    const config = loadConfig(env);
+    expect(config.providers.passthrough).toBeDefined();
+    expect(config.providers.passthrough.protocol).toBe("anthropic");
+    expect(config.routing["minimax*"]).toBe("passthrough");
+  });
+
+  it("creates model mapping on legacy provider when enabled", () => {
+    const env: Env = { ...minimalEnv, ENABLE_MODEL_MAPPING: "true" };
+    const config = loadConfig(env);
+    expect(config.providers.default.modelMapping).toEqual({
+      opus: "gpt-4o",
+      sonnet: "gpt-4o",
+      haiku: "gpt-4o-mini",
+    });
   });
 });
 
-// ---- mapModel ----
+// ---- loadConfig (multi-provider mode) ----
 
-describe("mapModel", () => {
-  const config: AppConfig = {
-    openaiApiKey: "test",
-    openaiBaseUrl: "https://api.openai.com/v1",
-    bigModel: "gpt-4o",
-    middleModel: "gpt-4o",
-    smallModel: "gpt-4o-mini",
-    maxTokensLimit: 16384,
-    minTokensLimit: 4096,
-    requestTimeout: 90,
-    logLevel: "WARNING",
-    customHeaders: {},
-    passthroughModels: [],
-    enableModelMapping: false,
+describe("loadConfig (multi-provider mode)", () => {
+  const baseEnv: Env = {
+    OPENAI_API_KEY: "",
+    OPENAI_BASE_URL: "",
+    BIG_MODEL: "",
+    MIDDLE_MODEL: "",
+    SMALL_MODEL: "",
+    MAX_TOKENS_LIMIT: "16384",
+    MIN_TOKENS_LIMIT: "4096",
+    REQUEST_TIMEOUT: "90",
+    LOG_LEVEL: "WARNING",
   };
 
-  const mappingConfig: AppConfig = { ...config, enableModelMapping: true };
-
-  // Default behavior: pass through all model names as-is
-  it("forwards Claude model names as-is when mapping disabled", () => {
-    expect(mapModel(config, "claude-3-5-sonnet-20241022")).toBe("claude-3-5-sonnet-20241022");
-    expect(mapModel(config, "claude-sonnet-4-20250514")).toBe("claude-sonnet-4-20250514");
-    expect(mapModel(config, "claude-3-opus-20240229")).toBe("claude-3-opus-20240229");
-    expect(mapModel(config, "claude-3-5-haiku-20241022")).toBe("claude-3-5-haiku-20241022");
-    expect(mapModel(config, "some-unknown-model")).toBe("some-unknown-model");
-  });
-
-  // Pass-through models (works regardless of mapping setting)
-  it("passes through gpt-* model names", () => {
-    expect(mapModel(config, "gpt-4o")).toBe("gpt-4o");
-    expect(mapModel(config, "gpt-4o-mini")).toBe("gpt-4o-mini");
-    expect(mapModel(config, "gpt-3.5-turbo")).toBe("gpt-3.5-turbo");
-  });
-
-  it("passes through o1-* model names", () => {
-    expect(mapModel(config, "o1-preview")).toBe("o1-preview");
-    expect(mapModel(config, "o1-mini")).toBe("o1-mini");
-  });
-
-  it("passes through o3-* model names", () => {
-    expect(mapModel(config, "o3-mini")).toBe("o3-mini");
-  });
-
-  it("passes through o4-* model names", () => {
-    expect(mapModel(config, "o4-mini")).toBe("o4-mini");
-  });
-
-  it("passes through deepseek-* model names", () => {
-    expect(mapModel(config, "deepseek-chat")).toBe("deepseek-chat");
-    expect(mapModel(config, "deepseek-coder")).toBe("deepseek-coder");
-  });
-
-  it("passes through glm-* model names", () => {
-    expect(mapModel(config, "glm-5.1")).toBe("glm-5.1");
-    expect(mapModel(config, "glm-4")).toBe("glm-4");
-    expect(mapModel(config, "glm-5")).toBe("glm-5");
-  });
-
-  it("passes through qwen-* model names", () => {
-    expect(mapModel(config, "qwen-turbo")).toBe("qwen-turbo");
-    expect(mapModel(config, "qwen-max")).toBe("qwen-max");
-  });
-
-  it("passes through gemini-* model names", () => {
-    expect(mapModel(config, "gemini-2.5-pro")).toBe("gemini-2.5-pro");
-    expect(mapModel(config, "gemini-2.0-flash")).toBe("gemini-2.0-flash");
-  });
-
-  it("passes through ep-* model names", () => {
-    expect(mapModel(config, "ep-2024-custom")).toBe("ep-2024-custom");
-  });
-
-  it("passes through doubao-* model names", () => {
-    expect(mapModel(config, "doubao-pro")).toBe("doubao-pro");
-  });
-
-  // Claude model mapping (when enabled)
-  it("maps haiku to small model when enabled", () => {
-    expect(mapModel(mappingConfig, "claude-3-5-haiku-20241022")).toBe("gpt-4o-mini");
-    expect(mapModel(mappingConfig, "claude-3-haiku-20240307")).toBe("gpt-4o-mini");
-  });
-
-  it("maps sonnet to middle model when enabled", () => {
-    expect(mapModel(mappingConfig, "claude-3-5-sonnet-20241022")).toBe("gpt-4o");
-    expect(mapModel(mappingConfig, "claude-sonnet-4-20250514")).toBe("gpt-4o");
-  });
-
-  it("maps opus to big model when enabled", () => {
-    expect(mapModel(mappingConfig, "claude-3-opus-20240229")).toBe("gpt-4o");
-    expect(mapModel(mappingConfig, "claude-opus-4-20250514")).toBe("gpt-4o");
-  });
-
-  it("defaults unknown models to big model when enabled", () => {
-    expect(mapModel(mappingConfig, "some-unknown-model")).toBe("gpt-4o");
-  });
-
-  // With custom config for GLM 5.1
-  it("maps claude models to GLM models when configured and enabled", () => {
-    const glmConfig: AppConfig = {
-      ...mappingConfig,
-      bigModel: "glm-5.1",
-      middleModel: "glm-5.1",
-      smallModel: "glm-5.1",
+  it("parses PROVIDERS JSON and creates providers", () => {
+    const env: Env = {
+      ...baseEnv,
+      PROVIDERS: JSON.stringify({
+        default: "openai",
+        routing: { "glm-*": "glm" },
+        providers: {
+          openai: {},
+          glm: {},
+        },
+      }),
+      PROVIDER_OPENAI_API_KEY: "sk-openai",
+      PROVIDER_GLM_API_KEY: "sk-glm",
     };
-    expect(mapModel(glmConfig, "claude-3-5-sonnet-20241022")).toBe("glm-5.1");
-    expect(mapModel(glmConfig, "claude-3-5-haiku-20241022")).toBe("glm-5.1");
-    expect(mapModel(glmConfig, "claude-3-opus-20240229")).toBe("glm-5.1");
+    const config = loadConfig(env);
+    expect(config.defaultProvider).toBe("openai");
+    expect(config.providers.openai).toBeDefined();
+    expect(config.providers.openai.baseUrl).toBe("https://api.openai.com/v1");
+    expect(config.providers.openai.apiKey).toBe("sk-openai");
+    expect(config.providers.glm).toBeDefined();
+    expect(config.providers.glm.baseUrl).toBe("https://open.bigmodel.cn/api/paas/v4");
+    expect(config.providers.glm.apiKey).toBe("sk-glm");
+    expect(config.routing["glm-*"]).toBe("glm");
+  });
+
+  it("supports custom provider with baseUrl", () => {
+    const env: Env = {
+      ...baseEnv,
+      PROVIDERS: JSON.stringify({
+        default: "my-custom",
+        providers: {
+          "my-custom": {
+            baseUrl: "https://my-api.example.com/v1",
+            protocol: "openai",
+          },
+        },
+      }),
+      PROVIDER_MY_CUSTOM_API_KEY: "sk-custom",
+    };
+    const config = loadConfig(env);
+    expect(config.providers["my-custom"]).toBeDefined();
+    expect(config.providers["my-custom"].baseUrl).toBe("https://my-api.example.com/v1");
+    expect(config.providers["my-custom"].apiKey).toBe("sk-custom");
+  });
+
+  it("auto-creates default provider entry if not in providers list", () => {
+    const env: Env = {
+      ...baseEnv,
+      PROVIDERS: JSON.stringify({
+        default: "openai",
+      }),
+      PROVIDER_OPENAI_API_KEY: "sk-test",
+    };
+    const config = loadConfig(env);
+    expect(config.providers.openai).toBeDefined();
+    expect(config.providers.openai.baseUrl).toBe("https://api.openai.com/v1");
+  });
+
+  it("merges known provider defaults with user overrides", () => {
+    const env: Env = {
+      ...baseEnv,
+      PROVIDERS: JSON.stringify({
+        default: "glm",
+        providers: {
+          glm: { timeout: 120, headers: { "X-Custom": "value" } },
+        },
+      }),
+    };
+    const config = loadConfig(env);
+    expect(config.providers.glm.baseUrl).toBe("https://open.bigmodel.cn/api/paas/v4");
+    expect(config.providers.glm.timeout).toBe(120);
+    expect(config.providers.glm.headers["X-Custom"]).toBe("value");
+  });
+
+  it("throws on invalid PROVIDERS JSON", () => {
+    const env: Env = { ...baseEnv, PROVIDERS: "not json" };
+    expect(() => loadConfig(env)).toThrow("Invalid PROVIDERS JSON");
+  });
+
+  it("throws when PROVIDERS has no default field", () => {
+    const env: Env = { ...baseEnv, PROVIDERS: "{}" };
+    expect(() => loadConfig(env)).toThrow("must have a 'default' field");
   });
 });
 
-// ---- isPassthroughModel ----
+// ---- globMatch ----
 
-describe("isPassthroughModel", () => {
-  const baseConfig: AppConfig = {
-    openaiApiKey: "test",
-    openaiBaseUrl: "https://api.openai.com/v1",
-    bigModel: "gpt-4o",
-    middleModel: "gpt-4o",
-    smallModel: "gpt-4o-mini",
-    maxTokensLimit: 16384,
-    minTokensLimit: 4096,
-    requestTimeout: 90,
-    logLevel: "WARNING",
-    customHeaders: {},
-    passthroughModels: [],
-    enableModelMapping: false,
+describe("globMatch", () => {
+  it("matches exact strings", () => {
+    expect(globMatch("gpt-4o", "gpt-4o")).toBe(true);
+    expect(globMatch("gpt-4o", "gpt-4")).toBe(false);
+  });
+
+  it("matches wildcard patterns", () => {
+    expect(globMatch("glm-5.1", "glm-*")).toBe(true);
+    expect(globMatch("glm-4", "glm-*")).toBe(true);
+    expect(globMatch("gpt-4o", "glm-*")).toBe(false);
+  });
+
+  it("matches multiple wildcards", () => {
+    expect(globMatch("meta-llama-3.1", "meta-*-*")).toBe(true);
+  });
+
+  it("matches question mark wildcard", () => {
+    expect(globMatch("gpt-4o", "gpt-?o")).toBe(true);
+    expect(globMatch("gpt-4o", "gpt-??")).toBe(true);
+    expect(globMatch("gpt-4o", "gpt-?")).toBe(false);
+  });
+
+  it("is case-sensitive (caller should lowercase)", () => {
+    expect(globMatch("glm-5.1", "GLM-*")).toBe(false);
+    expect(globMatch("glm-5.1", "glm-*")).toBe(true);
+  });
+});
+
+// ---- resolveProvider ----
+
+describe("resolveProvider", () => {
+  const providers: Record<string, ResolvedProvider> = {
+    openai: {
+      name: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      protocol: "openai",
+      apiKey: "sk-openai",
+      timeout: 90,
+      headers: {},
+    },
+    glm: {
+      name: "glm",
+      baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+      protocol: "openai",
+      apiKey: "sk-glm",
+      timeout: 90,
+      headers: {},
+    },
+    anthropic: {
+      name: "anthropic",
+      baseUrl: "https://api.anthropic.com/v1",
+      protocol: "anthropic",
+      apiKey: "sk-ant",
+      timeout: 90,
+      headers: {},
+    },
   };
 
-  it("returns false when no passthrough models configured", () => {
-    expect(isPassthroughModel(baseConfig, "minimax-m2.5")).toBe(false);
-    expect(isPassthroughModel(baseConfig, "glm-5.1")).toBe(false);
+  const routing = {
+    "glm-*": "glm",
+    "claude-*": "anthropic",
+    "gpt-*": "openai",
+  };
+
+  it("routes glm-* models to glm provider", () => {
+    const result = resolveProvider("glm-5.1", routing, "openai", providers);
+    expect(result?.name).toBe("glm");
   });
 
-  it("matches model by prefix", () => {
-    const config = { ...baseConfig, passthroughModels: ["minimax"] };
-    expect(isPassthroughModel(config, "minimax-m2.5")).toBe(true);
-    expect(isPassthroughModel(config, "minimax-m2.7")).toBe(true);
-    expect(isPassthroughModel(config, "glm-5.1")).toBe(false);
+  it("routes claude-* models to anthropic provider", () => {
+    const result = resolveProvider("claude-3.5-sonnet", routing, "openai", providers);
+    expect(result?.name).toBe("anthropic");
   });
 
-  it("supports multiple prefixes", () => {
-    const config = { ...baseConfig, passthroughModels: ["minimax", "some-other"] };
-    expect(isPassthroughModel(config, "minimax-m2.5")).toBe(true);
-    expect(isPassthroughModel(config, "some-other-model")).toBe(true);
-    expect(isPassthroughModel(config, "glm-5.1")).toBe(false);
+  it("routes gpt-* models to openai provider", () => {
+    const result = resolveProvider("gpt-4o", routing, "openai", providers);
+    expect(result?.name).toBe("openai");
   });
 
-  it("is case-insensitive", () => {
-    const config = { ...baseConfig, passthroughModels: ["minimax"] };
-    expect(isPassthroughModel(config, "MiniMax-M2.5")).toBe(true);
+  it("falls back to default provider for unmatched models", () => {
+    const result = resolveProvider("some-unknown-model", routing, "openai", providers);
+    expect(result?.name).toBe("openai");
+  });
+
+  it("is case-insensitive for model matching", () => {
+    const result = resolveProvider("GLM-5.1", routing, "openai", providers);
+    expect(result?.name).toBe("glm");
+  });
+});
+
+// ---- mapModelForProvider ----
+
+describe("mapModelForProvider", () => {
+  const provider: ResolvedProvider = {
+    name: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    protocol: "openai",
+    apiKey: "test",
+    timeout: 90,
+    headers: {},
+  };
+
+  it("returns model as-is when no mapping configured", () => {
+    expect(mapModelForProvider(provider, "glm-5.1")).toBe("glm-5.1");
+    expect(mapModelForProvider(provider, "gpt-4o")).toBe("gpt-4o");
+  });
+
+  it("maps models when mapping is configured", () => {
+    const mapped = {
+      ...provider,
+      modelMapping: { opus: "gpt-4o", sonnet: "gpt-4o", haiku: "gpt-4o-mini" },
+    };
+    expect(mapModelForProvider(mapped, "claude-3-opus-20240229")).toBe("gpt-4o");
+    expect(mapModelForProvider(mapped, "claude-3-5-sonnet-20241022")).toBe("gpt-4o");
+    expect(mapModelForProvider(mapped, "claude-3-5-haiku-20241022")).toBe("gpt-4o-mini");
+  });
+
+  it("returns model as-is when no mapping keyword matches", () => {
+    const mapped = {
+      ...provider,
+      modelMapping: { opus: "gpt-4o" },
+    };
+    expect(mapModelForProvider(mapped, "some-other-model")).toBe("some-other-model");
   });
 });
 
 // ---- validateClientApiKey ----
 
 describe("validateClientApiKey", () => {
-  const baseConfig: AppConfig = {
-    openaiApiKey: "test",
-    openaiBaseUrl: "https://api.openai.com/v1",
-    bigModel: "gpt-4o",
-    middleModel: "gpt-4o",
-    smallModel: "gpt-4o-mini",
-    maxTokensLimit: 16384,
-    minTokensLimit: 4096,
-    requestTimeout: 90,
-    logLevel: "WARNING",
-    customHeaders: {},
-    passthroughModels: [],
-    enableModelMapping: false,
-  };
+  const baseConfig = makeConfig();
 
   it("returns true when no ANTHROPIC_API_KEY is configured", () => {
     expect(validateClientApiKey(baseConfig, null)).toBe(true);
@@ -326,27 +426,27 @@ describe("validateClientApiKey", () => {
   });
 
   it("returns false when configured but no client key provided", () => {
-    const config = { ...baseConfig, anthropicApiKey: "sk-ant-secret" };
+    const config = makeConfig({ anthropicApiKey: "sk-ant-secret" });
     expect(validateClientApiKey(config, null)).toBe(false);
   });
 
   it("returns true for matching key", () => {
-    const config = { ...baseConfig, anthropicApiKey: "sk-ant-secret" };
+    const config = makeConfig({ anthropicApiKey: "sk-ant-secret" });
     expect(validateClientApiKey(config, "sk-ant-secret")).toBe(true);
   });
 
   it("returns false for non-matching key", () => {
-    const config = { ...baseConfig, anthropicApiKey: "sk-ant-secret" };
+    const config = makeConfig({ anthropicApiKey: "sk-ant-secret" });
     expect(validateClientApiKey(config, "wrong-key")).toBe(false);
   });
 
   it("returns false for key with different length", () => {
-    const config = { ...baseConfig, anthropicApiKey: "short" };
+    const config = makeConfig({ anthropicApiKey: "short" });
     expect(validateClientApiKey(config, "a-much-longer-key")).toBe(false);
   });
 
   it("uses constant-time comparison (same length different values)", () => {
-    const config = { ...baseConfig, anthropicApiKey: "aaaa" };
+    const config = makeConfig({ anthropicApiKey: "aaaa" });
     expect(validateClientApiKey(config, "aaab")).toBe(false);
     expect(validateClientApiKey(config, "baaa")).toBe(false);
   });

@@ -1,11 +1,11 @@
 import type { Env } from "./types";
 import { loadConfig } from "./config";
+import { authenticate } from "./auth";
 import {
   handleMessages,
   handleCountTokens,
   handleHealth,
   handleRoot,
-  authenticate,
 } from "./handlers";
 
 export default {

@@ -10,17 +10,16 @@ import type {
   OpenAIToolCall,
   OpenAITool,
 } from "../types";
-import { mapModel } from "../config";
 
 /**
  * Convert a Claude Messages API request into an OpenAI Chat Completions
- * request.
+ * request. Model mapping is handled by the provider layer before this is called.
  */
 export function convertClaudeToOpenAI(
   claudeRequest: ClaudeMessagesRequest,
   config: AppConfig,
 ): OpenAIRequest {
-  const openaiModel = mapModel(config, claudeRequest.model);
+  const openaiModel = claudeRequest.model;
 
   const openaiMessages: OpenAIMessage[] = [];
 
