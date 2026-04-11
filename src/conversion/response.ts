@@ -14,6 +14,7 @@ import { parseSSEChunk } from "../client";
 export function convertOpenAIToClaude(
   openaiResponse: OpenAIResponse,
   originalRequest: ClaudeMessagesRequest,
+  logLevel?: string,
 ): Record<string, unknown> {
   const choices = openaiResponse.choices ?? [];
   if (choices.length === 0) {
@@ -22,9 +23,10 @@ export function convertOpenAIToClaude(
 
   const choice = choices[0];
   const message = choice.message;
+  const debug = logLevel === "DEBUG";
 
-  // DEBUG: Log OpenAI response metadata (no user content for privacy)
-  console.log({
+  // Log response metadata; include raw content only in DEBUG mode
+  const logData: Record<string, unknown> = {
     _tag: "non-stream-response",
     has_content: message?.content !== null && message?.content !== undefined,
     content_type: typeof message?.content,
@@ -34,7 +36,12 @@ export function convertOpenAIToClaude(
     tool_calls_count: message?.tool_calls?.length ?? 0,
     finish_reason: choice.finish_reason,
     usage: openaiResponse.usage,
-  });
+  };
+  if (debug) {
+    logData.content = message?.content;
+    logData.reasoning_content = message?.reasoning_content;
+  }
+  console.log(logData);
 
   const contentBlocks: Record<string, unknown>[] = [];
 
@@ -116,7 +123,9 @@ export function convertOpenAIToClaude(
 export function convertOpenAIStreamToClaude(
   openaiStream: ReadableStream<string>,
   originalRequest: ClaudeMessagesRequest,
+  logLevel?: string,
 ): ReadableStream<string> {
+  const debug = logLevel === "DEBUG";
   const messageId = `msg_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
 
   // Block tracking: thinking block (optional, index 0 if present),
@@ -211,27 +220,29 @@ export function convertOpenAIStreamToClaude(
           const delta = choice.delta ?? {};
           const finishReason = choice.finish_reason;
 
-          // DEBUG: Log streaming deltas for diagnosing content issues
-          if (delta.reasoning_content !== null && delta.reasoning_content !== undefined) {
-            console.log({
-              _tag: "stream-delta",
-              type: "reasoning",
-              length: delta.reasoning_content.length,
-            });
-          }
-          if (delta.content !== null && delta.content !== undefined) {
-            console.log({
-              _tag: "stream-delta",
-              type: "content",
-              length: delta.content.length,
-            });
-          }
-          if (finishReason) {
-            console.log({
-              _tag: "stream-finish",
-              finish_reason: finishReason,
-              usage: chunk.usage,
-            });
+          // Log streaming deltas when DEBUG is enabled
+          if (debug) {
+            if (delta.reasoning_content !== null && delta.reasoning_content !== undefined) {
+              console.log({
+                _tag: "stream-delta",
+                type: "reasoning",
+                length: delta.reasoning_content.length,
+              });
+            }
+            if (delta.content !== null && delta.content !== undefined) {
+              console.log({
+                _tag: "stream-delta",
+                type: "content",
+                length: delta.content.length,
+              });
+            }
+            if (finishReason) {
+              console.log({
+                _tag: "stream-finish",
+                finish_reason: finishReason,
+                usage: chunk.usage,
+              });
+            }
           }
 
           // Reasoning/thinking delta (e.g. from GLM 5.1)
@@ -412,15 +423,16 @@ export function convertOpenAIStreamToClaude(
   });
 
   function emitFinalEvents(controller: ReadableStreamDefaultController<string>) {
-    // DEBUG: Log final streaming state
-    console.log({
-      _tag: "stream-final-state",
-      thinkingBlockStarted,
-      textBlockStarted,
-      toolCallsCount: currentToolCalls.size,
-      finalStopReason,
-      usageData,
-    });
+    if (debug) {
+      console.log({
+        _tag: "stream-final-state",
+        thinkingBlockStarted,
+        textBlockStarted,
+        toolCallsCount: currentToolCalls.size,
+        finalStopReason,
+        usageData,
+      });
+    }
 
     // Close thinking block if it wasn't closed (no text content followed)
     if (thinkingBlockStarted && !textBlockStarted) {

@@ -142,7 +142,7 @@ async function handleMessagesOpenAI(
         signal,
         apiKey,
       );
-      const claudeStream = convertOpenAIStreamToClaude(openaiStream, body);
+      const claudeStream = convertOpenAIStreamToClaude(openaiStream, body, config.logLevel);
 
       // Encode string chunks into bytes for the response
       const encoder = new TextEncoder();
@@ -166,7 +166,7 @@ async function handleMessagesOpenAI(
       // Non-streaming
       const signal = AbortSignal.timeout(config.requestTimeout * 1000);
       const openaiResponse = await createChatCompletion(config, openaiRequest, signal, apiKey);
-      const claudeResponse = convertOpenAIToClaude(openaiResponse, body);
+      const claudeResponse = convertOpenAIToClaude(openaiResponse, body, config.logLevel);
       return Response.json(claudeResponse);
     }
   } catch (err) {
