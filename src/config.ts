@@ -25,6 +25,13 @@ export function loadConfig(env: Env): AppConfig {
     // --- Multi-provider mode ---
     const parsed = parseProvidersJson(env.PROVIDERS);
     const providers = resolveProviders(parsed, env, globalTimeout);
+    console.log({
+      _tag: "config-mode",
+      mode: "multi-provider",
+      default: parsed.default,
+      routing: Object.keys(parsed.routing ?? {}),
+      providers: Object.keys(providers),
+    });
     return {
       anthropicApiKey,
       logLevel,
@@ -48,6 +55,12 @@ export function loadConfig(env: Env): AppConfig {
   }
 
   // --- Legacy single-provider mode ---
+  console.warn({
+    _tag: "config-mode",
+    mode: "legacy",
+    message: "PROVIDERS env var not set — using legacy single-provider mode",
+    baseUrl: env.OPENAI_BASE_URL || "https://api.openai.com/v1",
+  });
   const legacyProvider = buildLegacyProvider(env, globalTimeout, customHeaders);
   const providers: Record<string, ResolvedProvider> = { default: legacyProvider };
 

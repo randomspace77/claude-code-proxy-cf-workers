@@ -85,15 +85,14 @@ export async function handleMessages(
     return errorResponse(400, `No provider configured for model "${model}"`);
   }
 
-  if (config.logLevel === "DEBUG") {
-    console.log({
-      _tag: "provider-resolved",
-      model,
-      provider: provider.name,
-      protocol: provider.protocol,
-      baseUrl: provider.baseUrl,
-    });
-  }
+  // Always log routing result (essential for troubleshooting)
+  console.log({
+    _tag: "route",
+    model,
+    provider: provider.name,
+    protocol: provider.protocol,
+    baseUrl: provider.baseUrl,
+  });
 
   return dispatchToProvider(provider, body, clientApiKey, config);
 }

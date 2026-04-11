@@ -25,20 +25,25 @@ enabled = false
 # Defaults are handled in src/config.ts.
 #
 # Dashboard → Settings → Variables and Secrets:
+#
+#   PROVIDERS              (JSON string — multi-provider mode config, see README)
+#                          Example: {"default":"opencode","routing":{"minimax*":"opencode-pt"},"providers":{"opencode":{},"opencode-pt":{"baseUrl":"https://opencode.ai/zen/go/v1","protocol":"anthropic"}}}
+#
+#   LOG_LEVEL              (default: WARNING, set to DEBUG for troubleshooting)
+#   MAX_TOKENS_LIMIT       (default: 16384)
+#   MIN_TOKENS_LIMIT       (default: 4096)
+#   REQUEST_TIMEOUT        (default: 90)
+#
+# Legacy mode vars (only when PROVIDERS is not set):
 #   OPENAI_BASE_URL        (default: https://api.openai.com/v1)
 #   BIG_MODEL              (default: gpt-4o)
 #   MIDDLE_MODEL           (default: same as BIG_MODEL)
 #   SMALL_MODEL            (default: gpt-4o-mini)
-#   MAX_TOKENS_LIMIT       (default: 16384)
-#   MIN_TOKENS_LIMIT       (default: 4096)
-#   REQUEST_TIMEOUT        (default: 90)
-#   LOG_LEVEL              (default: WARNING)
 #   PASSTHROUGH_MODELS     (comma-separated model prefixes for Anthropic passthrough)
 #   ENABLE_MODEL_MAPPING   (set to "true" to enable Claude→provider model mapping)
 #
 # Secrets (use `wrangler secret put <KEY>` or Dashboard):
-#   OPENAI_API_KEY         (optional — leave unset for client key passthrough, recommended)
-#   ANTHROPIC_API_KEY      (optional — additional client auth layer)
-#   AZURE_API_VERSION      (optional — for Azure OpenAI)
-#   CUSTOM_HEADERS         (optional — JSON string of custom HTTP headers)
+#   ANTHROPIC_API_KEY      (proxy auth — clients must send this key to access proxy)
+#   PROVIDER_<NAME>_API_KEY (per-provider API keys, e.g. PROVIDER_OPENCODE_API_KEY)
+#   OPENAI_API_KEY         (legacy mode only)
 # ============================================================
